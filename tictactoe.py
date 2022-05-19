@@ -187,9 +187,7 @@ class Agent:
 class RLAgent(Agent):
     def __init__(self, name: str = ''):
         super().__init__(name)
-        self.records = [[[GameRecord() for i in range(9)]
-                         for j in range(3**9)] for k in range(2)]
-
+        self.records = [[GameRecord() for i in range(9)] for j in range(3**9)]
     def start_game(self, turn: int, learning=True):
         super().start_game(turn, learning)
         self.history = []
@@ -197,7 +195,7 @@ class RLAgent(Agent):
     def mark(self, board: Board) -> int:
         DEFAULT_MIN_GAMES = 100
         MIN_SUM_RATE = 0.001
-        records = self.records[self.turn-1][board.code]
+        records = self.records[board.code]
         best_way = -1
         min_game_way = -1
         best_rate = -0.001
@@ -243,7 +241,7 @@ class RLAgent(Agent):
     def record_game_result(self, result: int) -> None:
         super().record_game_result(result)
         for (code, pos) in self.history:
-            self.records[self.turn-1][code][pos].add(result)
+            self.records[code][pos].add(result)
 
 
 class RandomAgent(Agent):
