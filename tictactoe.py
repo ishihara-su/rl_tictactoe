@@ -194,7 +194,6 @@ class RLAgent(Agent):
         super().start_game(turn, learning)
         self.history = []
 
-    # TODO: divide this function into shorter ones
     def mark(self, board: Board) -> int:
         DEFAULT_MIN_GAMES = 100
         MIN_SUM_RATE = 0.001
@@ -210,15 +209,10 @@ class RLAgent(Agent):
                 continue
             wins, games = records[i].wins, records[i].games
             if games <= min_games:
-                min_game_way = i
-                min_games = games
-            if games == 0:
-                rate = 0.0
-            else:
-                rate = wins/games
+                min_game_way, min_games = i, games
+            rate = 0.0 if games == 0 else wins/games
             if rate > best_rate:
-                best_way = i
-                best_rate = rate
+                best_way, best_rate = i, rate
             if verbose:
                 print(f'{i}: {records[i].wp:.3f}, ', end='')
             candidates.append((i, rate))
