@@ -174,11 +174,11 @@ class Agent:
             f'{self.name:12s} WP: {self.wp[-1]:.3f} Win: {self.wins:5d} Draw: {self.draws:5d} Games: {self.games}')
 
 class QLAgent(Agent):
-    def __init__(self, name: str = '', learning_rate = 0.3, discount_ratio = 0.5):
+    def __init__(self, name: str = '', learning_rate = 0.3, discount_ratio = 0.7):
         super().__init__(name)
-        self.learning_rate = 0.2
-        self.discount_ratio = 0.9999999999
-        self.q = [[0] * 9 for j in range(3**9)]
+        self.learning_rate = learning_rate
+        self.discount_ratio = discount_ratio
+        self.q = [[0.1] * 9 for j in range(3**9)]
 
     def start_game(self, turn: int, learning: bool = True) -> None:
         super().start_game(turn, learning)
@@ -186,7 +186,7 @@ class QLAgent(Agent):
 
     def select_softmax(self, board: Board) -> int:
         candidates = []
-        temperature = 2.0
+        temperature = 0.5
         xmax = max([self.q[board.code][i]/temperature for i in range(9)])
         weights = [math.exp(self.q[board.code][i]/temperature - xmax) for i in range(9)]
         sum_weight = 0.0
@@ -201,31 +201,43 @@ class QLAgent(Agent):
             r -= weights[i]
         assert False
 
+    def select_best(self, board: Board) -> int:
+        candidates = [i for i in range(9) if not board.is_occupied(i)]
+        wps = [self.q[board.code][i] for i in candidates if not board.is_occupied(i)]
+        return candidates[np.argmax(wps)]
+
     def select_epsilon_greedy(self, board: Board) -> int:
         epsilon = 0.1
-        q = self.q[board.code]
-        selected = np.argmax(q)
-        if random.random() >= epsilon and q[selected] > 0.0:
-            return selected
         candidates = [i for i in range(9) if not board.is_occupied(i)]
+        if random.random() >= epsilon:
+            qs = [self.q[board.code][i] for i in candidates]
+            return candidates[np.argmax(qs)]
         return random.choice(candidates)
 
     def mark(self, board: Board) -> int:
-        #selected = self.select_epsilon_greedy(board)
-        selected = self.select_softmax(board)
+        if self.learning:
+            #selected = self.select_epsilon_greedy(board)
+            selected = self.select_softmax(board)
+        else:
+            selected = self.select_best(board)
+        self.history.append((board.code, selected))
         return board.mark_and_judge(self.turn, selected)
 
     def record_game_result(self, result: int) -> None:
         super().record_game_result(result)
+        if not self.learning:
+            return
         s = 0.0
         maxq = 0.0
         if result == Board.WIN:
             s = 1.0
         elif result == Board.DRAW:
-            s = 0.2
+            s = 0.0
+        else:
+            s = -1.0
         for (code, pos) in reversed(self.history):
             oldq = self.q[code][pos]
-            newq = oldq + self.learning_rate(s + self.discount_rate * maxq - oldq)
+            newq = oldq + self.learning_rate * (s + self.discount_ratio * maxq - oldq)
             maxq = max(newq, maxq)
             self.q[code][pos] = newq
 
@@ -238,53 +250,47 @@ class RLAgent(Agent):
         super().start_game(turn, learning)
         self.history = []
 
-    def select(self, board: Board) -> int:
-        DEFAULT_MIN_GAMES = 100
-        MIN_SUM_WP = 0.001
-        records = self.records[board.code]
-        if verbose:
-            for i in range(9):
-                print(f'{i}: {records[i].games:5d}, ', end='')
-            print()
-            for i in range(9):
-                if board.is_occupied(i):
-                    print(f'{i}:      , ', end='')
-                else:
-                    print(f'{i}: {records[i].wp:.3f}, ', end='')
-        candidates = [i for i in range(len(records)) if not board.is_occupied(i)]
-        games = [records[i].games for i in candidates]
-        if min(games) < DEFAULT_MIN_GAMES:
-            return candidates[np.argmin(games)]
-        wps = [records[i].wp for i in candidates]
-        sum_wp = sum(wps)
-        if sum_wp < MIN_SUM_WP:
-            return random.choice(candidates)
-        # slect based on very simple soft-max
-        temperature = 2.0
-        xmax = max([records[i].wp/temperature for i in candidates])
-        weights = [math.exp(records[i].wp/temperature - xmax) for i in candidates]
-        sum_weight = sum(weights)
-        if self.learning:
-            r = random.random() * sum_weight
-            i = 0
-            for w in weights:
-                if r < w:
-                    return candidates[i]
-                r -= w
-                i += 1
-            assert False
-        # select greedy
-        return candidates[np.argmax(wps)]
+    def select_softmax(self, wps):
+        sum_wps = sum(wps)
+        r = random.random() * sum_wps
+        for i in range(len(wps)):
+            wp = wps[i]
+            if r < wp:
+                return i
+            r -= wp
+        assert False
 
     def mark(self, board: Board) -> int:
-        selected = self.select(board)
+        DEFAULT_MIN_GAMES = 100
+        MIN_SUM_RATE = 0.001
+        records = self.records[board.code]
+        candidates = [i for i in range(len(records)) if not board.is_occupied(i)]
+        games = [records[c].games for c in candidates]
+        min_game_way = candidates[np.argmin(games)]
+        min_games = min(games)
+        wps = [records[c].wp for c in candidates]
+        best_way = candidates[np.argmax(wps)]
+        x_sum_wp = sum(wps)
+        if self.learning and min_games < DEFAULT_MIN_GAMES:
+            best_way = min_game_way
+        elif x_sum_wp < MIN_SUM_RATE:
+            best_way = random.choice(candidates)
+        elif self.learning:
+            best_way = candidates[self.select_softmax(wps)]
         if verbose:
-            print(f' Selected: {selected}')
-        self.history.append((board.code, selected))
-        return board.mark_and_judge(self.turn, selected)
+            print(f' Selected: {best_way}')
+        if best_way < 0:
+            for i in range(len(records)):
+                print(f'{i}: {records[i].wp:.3f}, ', end='', file=sys.stderr)
+            print('', file=sys.stderr)
+            error_exit('No valid hand is found.')
+        self.history.append((board.code, best_way))
+        return board.mark_and_judge(self.turn, best_way)
 
     def record_game_result(self, result: int) -> None:
         super().record_game_result(result)
+        if not self.learning:
+            return
         for (code, pos) in self.history:
             self.records[code][pos].add(result)
 
@@ -331,6 +337,8 @@ class HumanAgent(Agent):
 
 
 def play_games(agents: list[Agent], n_trials: int = 100, learning=False) -> None:
+    for a in agents:
+        a.init_stat()
     for i in range(n_trials):
         first = random.randrange(2)
         step = 0
@@ -347,7 +355,7 @@ def play_games(agents: list[Agent], n_trials: int = 100, learning=False) -> None
                 agents[ego].record_game_result(r)
                 other = (ego + 1) % 2
                 agents[other].record_game_result(-r)
-                winner_char = 'o' if agents[ego].turn == 1 else 'x'
+                # winner_char = 'o' if agents[ego].turn == 1 else 'x'
                 # print(f'            Winner:  {agents[ego].name} ({winner_char})')
                 break
             step += 1
@@ -356,20 +364,26 @@ def play_games(agents: list[Agent], n_trials: int = 100, learning=False) -> None
                 a.show_stat()
 
 
-if __name__ == '__main__':
+def main():
     n_trials = 100000
     n_battles = 500
+    learning_rate = 0.1
+    discount_ratio = 0.9
     random.seed(1)
     if len(sys.argv) >= 2:
         n_trials = int(sys.argv[1])
     if len(sys.argv) >= 3:
         n_battles = int(sys.argv[2])
-    verbose = False
-    rl1 = RLAgent('RL1')
-    rl2 = RLAgent('RL2')
-    ql1 = QLAgent('QL1')
-    ql2 = QLAgent('QL2')
+    if len(sys.argv) >= 4:
+        learning_rate = float(sys.argv[3])
+    if len(sys.argv) >= 5:
+        discount_ratio = float(sys.argv[4])
+    ql1 = QLAgent('QL1', learning_rate, discount_ratio)
+    ql2 = QLAgent('QL2', learning_rate, discount_ratio)
+    rl1 = QLAgent('RL1')
+    rl2 = QLAgent('RL2')
     ra = RandomAgent('Rand')
+    ha = HumanAgent('You')
     agents = [ql1, ql2]
     play_games(agents, n_trials, learning=True)
 
@@ -381,12 +395,6 @@ if __name__ == '__main__':
     ax1.set_ylabel('Winning Percentage')
     ax1.set_xlabel('# Trials')
 
-    #verbose = True
-    ha = HumanAgent('You')
-    rl1.init_stat()
-    ql1.init_stat()
-    ra.init_stat()
-    #agents = [rl1, ha]
     agents = [ql1, ra]
     play_games(agents, n_battles, learning=False)
 
@@ -396,4 +404,9 @@ if __name__ == '__main__':
     ax2.legend()
     ax2.set_ylabel('Winning Percentage')
     ax2.set_xlabel('# Battles')
+    for a in agents:
+        print(f'{a.name} WP: {a.wp[-1]}, Win: {a.wins}, Draw: {a.draws}, Loses: {a.games-a.wins-a.draws}')
     plt.show()
+
+if __name__ == '__main__':
+    main()
